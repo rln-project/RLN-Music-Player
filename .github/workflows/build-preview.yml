@@ -1,0 +1,43 @@
+name: Build Android test APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract Android project
+        run: |
+          mkdir source
+          tar -xzf RLN-Music-Player-source.tar.gz -C source
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APKs
+        working-directory: source
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RLN-Music-Player-debug-APKs
+          path: source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
