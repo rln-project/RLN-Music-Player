@@ -61,8 +61,14 @@ jobs:
           test -n "$native_code"
           printf 'Native architectures %s\n' "$native_code"
           actual_abis=$(unzip -Z1 "$apk" | awk -F/ '$1 == "lib" && NF == 3 && $3 ~ /\.so$/ {print $2}' | LC_ALL=C sort -u)
-          expected_abis=$(printf '%s\n' arm64-v8a armeabi-v7a x86_64)
+          expected_abis=$(printf '%s\n' arm64-v8a armeabi-v7a x86 x86_64)
           test "$actual_abis" = "$expected_abis"
+          unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-entries.txt"
+          while IFS= read -r abi; do
+            for library in libopentune_audio.so libquickjs.so; do
+              grep -Fx "lib/$abi/$library" "$RUNNER_TEMP/apk-entries.txt"
+            done
+          done <<< "$expected_abis"
           mkdir dist
           cp "$apk" dist/RLN-Music-Player-Global-v1.1.0-build51.apk
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
