@@ -1,0 +1,139 @@
+name: Refresh release 1.1.0 (build 49)
+on:
+  push:
+    branches: [release/update-1.1.0-build49]
+permissions:
+  contents: read
+concurrency:
+  group: refresh-release-v1.1.0
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and extract the source
+        run: |
+          test "$(git hash-object RLN-Music-Player-source.tar.gz)" = a447d3a9821611064703321fcc1301da8987c80e
+          mkdir source
+          tar -xzf RLN-Music-Player-source.tar.gz -C source
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare the release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RLN_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "RLN_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+      - name: Compile and sign the four variants
+        working-directory: source
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+          DISCORD_APP_ID: ${{ vars.DISCORD_APP_ID || secrets.DISCORD_APP_ID }}
+          RLN_KEYSTORE_PASSWORD: ${{ secrets.RLN_KEYSTORE_PASSWORD }}
+          RLN_KEY_ALIAS: ${{ secrets.RLN_KEY_ALIAS }}
+          RLN_KEY_PASSWORD: ${{ secrets.RLN_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - name: Verify version, signature and account references
+        env:
+          RLN_SIGNING_CERT_SHA256: ${{ vars.RLN_SIGNING_CERT_SHA256 || secrets.RLN_SIGNING_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          expected=$(printf '%s' "$RLN_SIGNING_CERT_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test -n "$expected"
+          mkdir dist
+          for variant in arm64-v8a armeabi-v7a universal x86_64; do
+            apk="source/app/build/outputs/apk/release/app-$variant-release.apk"
+            cert=$("$tools/apksigner" verify --print-certs "$apk")
+            actual=$(printf '%s\n' "$cert" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            test "$expected" = "$actual"
+            "$tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-version.txt"
+            grep -F "package: name='com.rln.musicplayer' versionCode='49' versionName='1.1.0'" "$RUNNER_TEMP/apk-version.txt"
+            cp "$apk" "dist/RLN-Music-Player-v1.1.0-$variant.apk"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          old = 'sinis' + 'gall'
+          blocked = [old.encode(encoding) for encoding in ('ascii', 'utf-16le', 'utf-16be')]
+          for apk in Path('dist').glob('*.apk'):
+              assert all(key not in apk.read_bytes().lower() for key in blocked), apk.name
+              found = False
+              with ZipFile(apk) as package:
+                  for member in package.namelist():
+                      data = package.read(member).lower()
+                      assert all(key not in data for key in blocked), (apk.name, member)
+                      found |= member.endswith('.dex') and b'rln-project' in data
+              assert found, apk.name
+          PY
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          cp RLN-Music-Player-source.tar.gz dist/RLN-Music-Player-source-build49.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-1.1.0-build49
+          path: dist/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+  publish:
+    needs: build
+    if: github.repository == 'rln-project/RLN-Music-Player'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: rln-project/RLN-Music-Player
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-1.1.0-build49
+          path: dist
+      - name: Replace the four APKs and their checksums on v1.1.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.1.0
+          release_info=$(gh api "repos/$GH_REPO/releases/tags/$tag")
+          jq -e '.id == 454022011 and .immutable == false and .draft == false and ([.assets[].id] | sort) == [777035460,777035461,777035462,777035464,777035465]' <<< "$release_info" >/dev/null
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          mkdir previous published
+          gh release download "$tag" --pattern '*.apk' --pattern SHA256SUMS.txt --dir previous
+          (cd previous && sha256sum -c SHA256SUMS.txt)
+          files=(RLN-Music-Player-v1.1.0-arm64-v8a.apk RLN-Music-Player-v1.1.0-armeabi-v7a.apk RLN-Music-Player-v1.1.0-universal.apk RLN-Music-Player-v1.1.0-x86_64.apk SHA256SUMS.txt)
+          replaced=()
+          rollback() {
+            local status=$?
+            trap - EXIT
+            if (( status != 0 )); then
+              for name in "${replaced[@]}"; do
+                gh release upload "$tag" "previous/$name" --clobber || echo "::error::Could not restore $name"
+              done
+            fi
+            exit "$status"
+          }
+          trap rollback EXIT
+          for name in "${files[@]}"; do
+            replaced+=("$name")
+            gh release upload "$tag" "dist/$name" --clobber
+          done
+          gh release download "$tag" --pattern '*.apk' --pattern SHA256SUMS.txt --dir published
+          cmp dist/SHA256SUMS.txt published/SHA256SUMS.txt
+          (cd published && sha256sum -c SHA256SUMS.txt)
+          gh release upload "$tag" dist/RLN-Music-Player-source-build49.tar.gz
+          trap - EXIT
