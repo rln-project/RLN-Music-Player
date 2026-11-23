@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>RLN Music Player | Download</title>
+<style>:root{font-family:system-ui,-apple-system,sans-serif;background:#081321;color:#eaf5ff}body{margin:0 auto;max-width:960px;padding:28px 18px}h1{font-size:clamp(1.8rem,5vw,3rem);margin-bottom:8px}p{color:#a6bdcd}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.pill{color:#4ae2ed;border:1px solid #246778;border-radius:20px;padding:7px 12px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:26px 0}.card{background:#10253a;border:1px solid #23465d;border-radius:18px;padding:20px}.value{font-size:2.2rem;font-weight:750;margin-top:10px;color:#66e4f4}.label{color:#b7cbd8}table{border-collapse:collapse;width:100%;background:#10253a;border-radius:14px;overflow:hidden}td,th{text-align:left;padding:14px;border-bottom:1px solid #274358}th{color:#b9d4e3}a{color:#69e8f5}button{background:#1b7e98;border:0;border-radius:9px;color:white;padding:10px 15px;cursor:pointer}#status{min-height:24px}</style></head><body>
+<div class="top"><span class="pill">RLN • Analytics</span><button id="refresh">Aggiorna</button></div><h1>Download RLN Music Player</h1><p>Statistiche degli APK pubblicati nelle GitHub Releases.</p><div class="cards"><div class="card"><div class="label">Download APK totali</div><div class="value" id="total">…</div></div><div class="card"><div class="label">Versioni pubblicate</div><div class="value" id="versions">…</div></div><div class="card"><div class="label">Ultimo aggiornamento</div><div id="updated" style="margin-top:15px">…</div></div></div>
+<p id="status" role="status" aria-live="polite"></p><h2>Download per versione</h2><table><thead><tr><th>Versione</th><th>APK</th><th>Download</th></tr></thead><tbody id="rows"></tbody></table><p>Il conteggio è quello fornito da GitHub per ogni asset APK. Non indica utenti unici, installazioni o download da altre piattaforme. Gli asset eliminati non sono più conteggiabili. Le release non pubblicate non sono incluse.</p><p><a href="https://github.com/rln-project/RLN-Music-Player/releases">Visualizza le Releases</a></p>
+<script>
+const base='https://api.github.com/repos/rln-project/RLN-Music-Player/releases?per_page=100';
+const fmt=n=>new Intl.NumberFormat('it-IT').format(n);
+async function load(){
+ const status=document.getElementById('status');status.textContent='Caricamento dati…';
+ try{
+  let all=[];for(let page=1;page<=20;page++){const response=await fetch(base+'&page='+page,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!response.ok)throw Error('GitHub API: '+response.status);const part=await response.json();all.push(...part);if(part.length<100)break;if(page===20)throw Error('Troppe release per un conteggio completo');}
+  const published=all.filter(r=>!r.draft);let total=0;const rows=[];
+  for(const r of published){const apks=r.assets.filter(a=>/\.apk$/i.test(a.name));for(const a of apks){total+=a.download_count;rows.push({tag:r.tag_name||r.name||'Senza nome',name:a.name,count:a.download_count,url:a.browser_download_url});}}
+  document.getElementById('total').textContent=fmt(total);document.getElementById('versions').textContent=fmt(published.length);
+  document.getElementById('updated').textContent=new Date().toLocaleString('it-IT');
+  const tbody=document.getElementById('rows');tbody.replaceChildren();
+  for(const item of rows){const tr=document.createElement('tr');const version=document.createElement('td');version.textContent=item.tag;const name=document.createElement('td');const a=document.createElement('a');a.href=item.url;a.textContent=item.name;name.append(a);const count=document.createElement('td');count.textContent=fmt(item.count);tr.append(version,name,count);tbody.append(tr);}
+  status.textContent=rows.length?'Dati aggiornati da GitHub.':'Nessun asset APK nelle release pubblicate.';
+ }catch(err){status.textContent='Impossibile aggiornare i dati: '+err.message+'. Riprova più tardi.';}
+}
+document.getElementById('refresh').addEventListener('click',load);load();
+</script></body></html>
