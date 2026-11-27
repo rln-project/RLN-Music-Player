@@ -43,7 +43,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Run all JVM tests
         working-directory: source
-        run: ./gradlew --no-daemon :core:test :app:test
+        run: |
+          # AGP's host tests reuse the app manifest. Provide Compose's test
+          # activity for the release-flavoured tests in this invocation only.
+          cat > "$RUNNER_TEMP/compose-host-tests.gradle" <<'GRADLE'
+          gradle.beforeProject { project ->
+              if (project.path == ':app') {
+                  project.pluginManager.withPlugin('com.android.application') {
+                      project.dependencies.add('releaseImplementation', 'androidx.compose.ui:ui-test-manifest')
+                  }
+              }
+          }
+          GRADLE
+          ./gradlew --no-daemon --init-script "$RUNNER_TEMP/compose-host-tests.gradle" :core:test :app:test
       - name: Build signed Global APK
         working-directory: source
         env:
@@ -89,6 +101,11 @@ jobs:
           grep -F "compileSdkVersion='37'" "$new"
           grep -Fx "sdkVersion:'26'" "$new"
           grep -Fx "targetSdkVersion:'36'" "$new"
+          "$tools/aapt" dump xmltree "$APK_52" AndroidManifest.xml > "$RUNNER_TEMP/release-manifest.txt"
+          if grep -Fq 'androidx.activity.ComponentActivity' "$RUNNER_TEMP/release-manifest.txt"; then
+            echo "Compose test activity must not be packaged in the signed APK" >&2
+            exit 1
+          fi
           diff <(grep -E '^(sdkVersion|targetSdkVersion):' "$old") <(grep -E '^(sdkVersion|targetSdkVersion):' "$new")
           unzip -Z1 "$APK_52" > "$RUNNER_TEMP/apk-entries.txt"
           actual=$(awk -F/ '$1 == "lib" && NF == 3 && $3 ~ /\.so$/ {print $2}' "$RUNNER_TEMP/apk-entries.txt" | LC_ALL=C sort -u)
