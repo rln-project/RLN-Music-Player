@@ -13,6 +13,10 @@ La base è il sorgente Global 1.1.0 build 51, presente in `14177275b62e0e5d1e2ff
 
 I test JVM `DiagnosticRedactorTest` e `PlaybackDiagnosticsTest` coprono credenziali in intestazioni, eccezioni e URL, idempotenza della redazione, durata del buffering, correlazione per traccia e limite del buffer. `AppLogTest` verifica il comportamento del registro esistente.
 
+I sei test mirati delle tre classi sono passati con JUnit 4 su JVM. Il confronto degli archivi estratti ha confermato che le modifiche al sorgente riguardano solo i file di diagnostica e i relativi test in `core`.
+
+Le suite Android si sono fermate prima della compilazione perché Gradle non ha riconosciuto il target `android-37` nell’SDK locale. Lo stesso errore è riproducibile con il sorgente Global build 51 di partenza.
+
 Per la verifica Android usare `./gradlew :core:testDebugUnitTest :app:testDebugUnitTest` dopo aver estratto il sorgente in una directory di lavoro. Le prove su dispositivo da eseguire prima del rilascio sono:
 
 1. Riprodurre uno stream, passare fra Wi-Fi e dati mobili ed esportare il report. Cercare transizioni di rete, buffering ed esito. Usare credenziali di prova per verificare la redazione.
