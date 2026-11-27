@@ -1,0 +1,137 @@
+name: Validate signed RLN Global 1.2.0 build 52
+
+on:
+  push:
+    branches: [feature/rln-1.2.0-diagnostics]
+    paths: [RLN-Music-Player-source.tar.gz, .github/workflows/validate-diagnostics-52.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  global:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      PACKAGE_NAME: com.rln.musicplayer
+      CERT_SHA256: 43f8d1591f70239277bc7374bd0b80c693829a251fac9e3a00d5e12d5d274467
+      APK_52: source/app/build/outputs/apk/release/app-universal-release.apk
+      APK_51: baseline/RLN-Music-Player-Global-v1.1.0-build51.apk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source and record provenance
+        run: |
+          mkdir source
+          tar -xzf RLN-Music-Player-source.tar.gz -C source
+          sha256sum RLN-Music-Player-source.tar.gz
+          git rev-parse HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1 emulator system-images;android-35;google_apis;x86_64
+      - name: Check the SDK used by the build
+        run: |
+          set -euo pipefail
+          sdkmanager --version
+          sdkmanager --list_installed
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run all JVM tests
+        working-directory: source
+        run: ./gradlew --no-daemon :core:test :app:test
+      - name: Build signed Global APK
+        working-directory: source
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RLN_KEYSTORE_BASE64 }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+          DISCORD_APP_ID: ${{ vars.DISCORD_APP_ID || secrets.DISCORD_APP_ID }}
+          RLN_KEYSTORE_PASSWORD: ${{ secrets.RLN_KEYSTORE_PASSWORD }}
+          RLN_KEY_ALIAS: ${{ secrets.RLN_KEY_ALIAS }}
+          RLN_KEY_PASSWORD: ${{ secrets.RLN_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          umask 077
+          export RLN_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$RLN_KEYSTORE"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RLN_KEYSTORE"
+          unset KEYSTORE_BASE64
+          ./gradlew --no-daemon :app:assembleRelease
+      - name: Download and verify the Global build 51 baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/"$GITHUB_REPOSITORY"/actions/artifacts/14775682648/zip > "$RUNNER_TEMP/global-51.zip"
+          echo "7a47201fc2e4e9c3147004b6433e857ccbf35f685c9f09cb212eff08f0556b5a  $RUNNER_TEMP/global-51.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/global-51.zip" -d baseline
+          (cd baseline && sha256sum -c SHA256SUMS.txt)
+      - name: Compare signatures, package, versions and SDK levels
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          for apk in "$APK_51" "$APK_52"; do
+            cert=$("$tools/apksigner" verify --verbose --print-certs -Werr "$apk")
+            printf '%s\n' "$cert"
+            test "$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$cert")" = "$CERT_SHA256"
+            "$tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/$(basename "$apk").txt"
+          done
+          old="$RUNNER_TEMP/$(basename "$APK_51").txt"
+          new="$RUNNER_TEMP/$(basename "$APK_52").txt"
+          grep -F "package: name='$PACKAGE_NAME' versionCode='51' versionName='1.1.0'" "$old"
+          grep -F "package: name='$PACKAGE_NAME' versionCode='52' versionName='1.2.0'" "$new"
+          grep -F "compileSdkVersion='37'" "$new"
+          grep -Fx "sdkVersion:'26'" "$new"
+          grep -Fx "targetSdkVersion:'36'" "$new"
+          diff <(grep -E '^(sdkVersion|targetSdkVersion):' "$old") <(grep -E '^(sdkVersion|targetSdkVersion):' "$new")
+          unzip -Z1 "$APK_52" > "$RUNNER_TEMP/apk-entries.txt"
+          actual=$(awk -F/ '$1 == "lib" && NF == 3 && $3 ~ /\.so$/ {print $2}' "$RUNNER_TEMP/apk-entries.txt" | LC_ALL=C sort -u)
+          expected=$(printf '%s\n' arm64-v8a armeabi-v7a x86 x86_64)
+          test "$actual" = "$expected"
+          while IFS= read -r abi; do
+            for library in libopentune_audio.so libquickjs.so; do
+              grep -Fx "lib/$abi/$library" "$RUNNER_TEMP/apk-entries.txt"
+            done
+          done <<< "$expected"
+      - name: Install build 51 and update in place to build 52
+        run: |
+          set -euo pipefail
+          sudo chmod a+rw /dev/kvm
+          echo no | avdmanager create avd --name rln-upgrade --package 'system-images;android-35;google_apis;x86_64'
+          emulator -avd rln-upgrade -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          trap 'adb emu kill >/dev/null 2>&1 || true' EXIT
+          timeout 240 adb wait-for-device
+          timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done'
+          adb shell input keyevent 82
+          adb install "$APK_51"
+          adb shell dumpsys package "$PACKAGE_NAME" > "$RUNNER_TEMP/package-51.txt"
+          grep -E 'versionCode=51([[:space:]]|$)' "$RUNNER_TEMP/package-51.txt"
+          adb install -r "$APK_52"
+          adb shell dumpsys package "$PACKAGE_NAME" > "$RUNNER_TEMP/package-52.txt"
+          grep -E 'versionCode=52([[:space:]]|$)' "$RUNNER_TEMP/package-52.txt"
+          grep -F 'versionName=1.2.0' "$RUNNER_TEMP/package-52.txt"
+          for field in firstInstallTime; do
+            previous=$(grep -m1 "$field=" "$RUNNER_TEMP/package-51.txt")
+            current=$(grep -m1 "$field=" "$RUNNER_TEMP/package-52.txt")
+            test "$previous" = "$current"
+          done
+          adb shell monkey -p "$PACKAGE_NAME" -c android.intent.category.LAUNCHER 1
+          sleep 8
+          adb shell pidof "$PACKAGE_NAME"
+      - name: Package verified artifact
+        run: |
+          mkdir dist
+          cp "$APK_52" dist/RLN-Music-Player-Global-v1.2.0-build52.apk
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RLN-Music-Player-Global-v1.2.0-build52
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
