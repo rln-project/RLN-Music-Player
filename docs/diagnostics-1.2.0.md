@@ -15,7 +15,11 @@ I test JVM `DiagnosticRedactorTest` e `PlaybackDiagnosticsTest` coprono credenzi
 
 I sei test mirati delle tre classi sono passati con JUnit 4 su JVM. Il confronto degli archivi estratti ha confermato che le modifiche al sorgente riguardano solo i file di diagnostica e i relativi test in `core`.
 
-Le suite Android si sono fermate prima della compilazione perché Gradle non ha riconosciuto il target `android-37` nell’SDK locale. Lo stesso errore è riproducibile con il sorgente Global build 51 di partenza.
+### SDK e build Global di test
+
+Il pacchetto ufficiale è `platforms;android-37.0`. Con la sola impostazione `compileSdk = 37`, AGP nel precedente ambiente locale cercava il target `android-37`. Impostare anche `compileSdkMinor = 0` in `:app` e `:core` seleziona esplicitamente la piattaforma installata. I livelli API restano 37 per la compilazione, 36 per il target runtime e 26 come minimo. In locale serve un JDK 21 completo di `javac`.
+
+Il workflow del ramo diagnostica esegue le suite JVM di `:app` e `:core`, firma la build universale con la chiave RLN e verifica il certificato contro la build 51. Controlla l'identità del pacchetto, la versione, i livelli SDK, le quattro ABI e la presenza delle librerie audio native. La prova di aggiornamento installa la build 51 e poi la 52 sullo stesso AVD. L'artefatto viene caricato in Actions dopo questi controlli.
 
 Per la verifica Android usare `./gradlew :core:testDebugUnitTest :app:testDebugUnitTest` dopo aver estratto il sorgente in una directory di lavoro. Le prove su dispositivo da eseguire prima del rilascio sono:
 
@@ -23,4 +27,4 @@ Per la verifica Android usare `./gradlew :core:testDebugUnitTest :app:testDebugU
 2. Ripetere con Google Cast, radio HLS, un file locale e un download offline. Confrontare il comportamento della riproduzione con Global build 51.
 3. Aprire ed esportare il report da smartphone e tablet, in verticale e orizzontale. Verificare l'aggiornamento in-app nel normale ciclo di validazione firmato.
 
-Le impostazioni di firma e il workflow di rilascio rimangono quelli della build 51. Questa fase usa il numero di build di partenza e non definisce il numero definitivo di 1.2.0.
+La build di test usa `versionName=1.2.0` e `versionCode=52`. Il workflow di rilascio e la configurazione della firma sono quelli della build 51.
