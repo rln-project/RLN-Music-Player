@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           sudo chmod a+rw /dev/kvm
           "$ANDROID_HOME/emulator/emulator" -accel-check
-          avdmanager create avd --name rln-upgrade --package 'system-images;android-35;google_apis;x86_64' </dev/null
+          echo no | avdmanager create avd --name rln-upgrade --package 'system-images;android-35;google_apis;x86_64'
           log="$RUNNER_TEMP/emulator.log"
           nohup "$ANDROID_HOME/emulator/emulator" -avd rln-upgrade -port 5554 -accel on -no-window -noaudio -no-boot-anim -no-snapshot -camera-back none -gpu swiftshader > "$log" 2>&1 </dev/null &
           emulator_pid=$!
